@@ -1,115 +1,124 @@
 // @classcade/compiler/resolver.js
 
-import { arrayfied } from './../utils.js';
+// ast -> css rules. the core semantic of classcade lives here: one token is
+// a single property whose value can change per state. so
+//
+//   bg[red]:hover[blue]
+//
+// resolves to TWO css rules that SHARE ONE class selector (the whole escaped
+// token string), differing only in the trailing variant selector:
+//
+//   .bg\[red\]\:hover\[blue\]        { background-color: red }
+//   .bg\[red\]\:hover\[blue\]:hover  { background-color: blue }
+//
+// a state without its own value (bg[red]:hover) contributes no new value —
+// it is skipped with a console.warn, not an error.
 
+import { arrayfied } from './utils.js';
+
+// characters that are legal in a classcade token but must be escaped to sit
+// inside a css class selector.
 function escapeSelector (raw) {
-  return raw.replace(/[\[\]():,.!#%\/\s+*:]/g, ch => `\\${ch}`);
+  return raw.replace(/[\[\]():,.!#%/\s+*]/g, ch => `\\${ch}`);
 }
 
-class Resolver {
+export class Resolver {
+
   constructor (registry) {
     this.registry = registry;
   }
 
   resolve (ast) {
-    return arrayfied(ast).map(node => this.resolveNode(node));
+    return arrayfied(ast).flatMap(node => this.resolveNode(node));
   }
 
   resolveNode (node) {
-    if (node.type === 'variant') return this.resolveVariant(node);
-    if (node.type === 'decl')    return this.resolveDecl(node);
-    throw new Error(`[classcade] Unknown node type "${node.type}"`);
+    if (node.type === 'rule') return this.resolveRule(node);
+    throw new Error(`[classcade] Unknown node type "${node.type}".`);
   }
 
-  resolveDecl (node) {
+  // returns an array of css rules: one base rule plus one per valued state.
+  resolveRule (node) {
+    const selectorBase = `.${escapeSelector(node.raw)}`;
+    const rules = [];
+
+    // base rule — a property with a value, or a value-less shorthand.
+    const baseDeclarations = this.declarationsFor(node.prop, node.base, node.important);
+    rules.push(this.makeRule(node.raw, selectorBase, baseDeclarations, null));
+
+    // one rule per state that carries its own value.
+    for (const state of node.states) {
+      if (state.value === null) {
+        // a variant without a value cannot override anything — ignore it, but
+        // tell the developer, since it is almost certainly a mistake.
+        console.warn(`[classcade] Variant ":${state.variant}" in "${node.raw}" has no value and was ignored.`);
+        continue;
+      }
+
+      const declarations = this.declarationsFor(node.prop, state.value, node.important);
+      const wrapped      = this.applyVariant(state.variant, selectorBase, declarations);
+      rules.push(this.makeRule(node.raw, wrapped.selector, wrapped.declarations, wrapped.media));
+    }
+
+    return rules;
+  }
+
+  // resolves { prop, value } into a flat css declaration object, applying
+  // prop-aliases, fn-aliases, shorthands, and !important.
+  declarationsFor (prop, value, important) {
     let declarations;
 
-    if (node.value === null) {
-      const def = this.registry.get(node.prop);
+    if (value === null) {
+      // no value -> must be a registered shorthand.
+      const def = this.registry.get(prop);
       if (!def || def.kind !== 'shorthand') {
-        throw new Error(`[classcade] "${node.prop}" hat keinen Wert und ist kein registrierter Shorthand.`);
+        throw new Error(`[classcade] "${prop}" has no value and is not a registered shorthand.`);
       }
       declarations = { ...def.declarations };
     } else {
-      const alias   = this.registry.get(node.prop);
-      const cssProp = (alias?.kind === 'alias-prop') ? alias.ref : node.prop;
-      declarations  = { [cssProp]: this.resolveValue(node.value) };
+      const alias   = this.registry.get(prop);
+      const cssProp = alias?.kind === 'alias-prop' ? alias.ref : prop;
+      declarations  = { [cssProp]: this.resolveValue(value) };
     }
 
-    if (node.important) {
-      declarations = Object.fromEntries(Object.entries(declarations).map(([k, v]) => [k, `${v} !important`]));
-    }
-
-    return { id: node.raw, selector: `.${escapeSelector(node.raw)}`, declarations, layer: null, media: null, supports: null };
+    return important ? withImportant(declarations) : declarations;
   }
 
-  // ersetzt registrierte Funktions-Aliase innerhalb eines rohen Werts,
-  // z.B. "ld(white black)" -> "light-dark(white black)"
+  // rewrites registered fn-aliases inside a raw value:
+  //   "ld(white black)" -> "light-dark(white black)"
+  // only the function NAME is touched; the arguments stay opaque css.
   resolveValue (raw) {
     return raw.replace(/([a-zA-Z_-][a-zA-Z0-9_-]*)\(/g, (match, name) => {
       const def = this.registry.get(name);
-      return (def?.kind === 'alias-fn') ? `${def.ref}(` : match;
+      return def?.kind === 'alias-fn' ? `${def.ref}(` : match;
     });
   }
 
-  resolveVariant (node) {
-    const inner = this.resolveNode(node.node);
-    let prefix = '', suffix = '', media = inner.media ?? null;
+  // applies a variant onto a selector + declarations. three kinds:
+  //   suffix -> ".sel:hover"          (pseudo-class / -element)
+  //   prefix -> "[data-theme=dark] .sel"
+  //   media  -> declarations wrapped under an @media query
+  // an unknown variant falls back to a naive pseudo-class suffix.
+  applyVariant (name, selector, declarations) {
+    const def = this.registry.get(name);
 
-    for (const v of node.variants) {
-      const def = this.registry.get(v);
-      if (def?.kind === 'variant-media')  { media = def.query; continue; }
-      if (def?.kind === 'variant-prefix') { prefix = def.selector + prefix; continue; }
-      suffix += def?.kind === 'variant-suffix' ? def.selector : `:${v}`; // Fallback: unbekannt -> naive Pseudoklasse
-    }
+    if (def?.kind === 'variant-media')  return { selector, declarations, media: def.query };
+    if (def?.kind === 'variant-prefix') return { selector: `${def.selector}${selector}`, declarations, media: null };
+    if (def?.kind === 'variant-suffix') return { selector: `${selector}${def.selector}`, declarations, media: null };
 
-    return { ...inner, selector: `${prefix}${inner.selector}${suffix}`, media };
+    return { selector: `${selector}:${name}`, declarations, media: null };
   }
+
+  makeRule (id, selector, declarations, media) {
+    return { id, selector, declarations, media, layer: null, supports: null };
+  }
+
+}
+
+function withImportant (declarations) {
+  return Object.fromEntries(
+    Object.entries(declarations).map(([k, v]) => [k, `${v} !important`]),
+  );
 }
 
 export default Resolver;
-
-
-
-
-
-// spec-resolver.js
-
-// Erkennt "prop: value; prop2: value2" (rohes CSS) vs. classcade-Syntax
-// ("bg[transparent]", "block"). Heuristik: enthält der String kein "[" und
-// matched das Muster "ident:", ist es CSS. Sonst wird's als classcade-String
-// an den mitgegebenen Resolver zurückgereicht.
-function looksLikeCss (str) {
-  return !str.includes('[') && /^[a-zA-Z-]+\s*:/.test(str);
-}
-
-function fromCssString (str) {
-  return str.split(';').map(s => s.trim()).filter(Boolean).reduce((acc, decl) => {
-    const i = decl.indexOf(':');
-    if (i === -1) return acc;
-    acc[decl.slice(0, i).trim()] = decl.slice(i + 1).trim();
-    return acc;
-  }, {});
-}
-
-// resolveClasscadeString: (source: string) => { [prop]: value }
-// wird vom Compiler injiziert (nutzt dessen eigenen Parser+Resolver)
-export function normalizeSpec (spec, resolveClasscadeString) {
-  if (spec == null) return {};
-
-  if (Array.isArray(spec)) {
-    return spec.reduce((acc, s) => Object.assign(acc, normalizeSpec(s, resolveClasscadeString)), {});
-  }
-
-  if (typeof spec === 'object') {
-    if ('prop' in spec && 'value' in spec) return { [spec.prop]: spec.value };
-    return { ...spec }; // schon ein flaches { prop: value }
-  }
-
-  if (typeof spec === 'string') {
-    const trimmed = spec.trim();
-    return looksLikeCss(trimmed) ? fromCssString(trimmed) : resolveClasscadeString(trimmed);
-  }
-
-  throw new Error(`[classcade] Cannot normalize spec: ${JSON.stringify(spec)}`);
-}
