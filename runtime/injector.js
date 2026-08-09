@@ -1,4 +1,4 @@
-// @classcade/compiler/injector.js
+// @classcade/runtime/injector.js
 
 // owns the generated stylesheet. keeps a set of already-injected rule ids so
 // the same class is never emitted twice, and appends new css to a single
