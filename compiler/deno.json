@@ -1,0 +1,9 @@
+{
+  "name": "@classcade/compiler",
+  "version": "1.0.0",
+  "exports": "./index.js",
+  "imports": {
+    "@cosmonaut/compiler" : "jsr:@cosmonaut/compiler@^1.0.0",
+    "@cosmonaut/parsers"  : "jsr:@cosmonaut/parsers@^1.0.0"
+  }
+}
