@@ -18,12 +18,17 @@
 <script type='module'>
 import { createDocsFW, html } from '@aufbau/builders/docs';
 
+globalThis.navigator?.serviceWorker?
+.register(new URL('./sw.js', import.meta.url), { type: 'module' })
+.catch(err => console.error('[SW Error]:', err));
+
+/*
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  navigator
-    .serviceWorker
+  navigator.serviceWorker
     .register(new URL('./sw.js', import.meta.url), { type: 'module' })
     .catch(err => console.error('[SW Error]:', err));
 }
+*/
 
 function VersionBanner() {
   return html`
