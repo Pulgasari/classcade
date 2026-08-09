@@ -32,7 +32,7 @@ export default function variantsPreset (cc) {
   }
 }
 
-
+/*
 // presets/variants.js
 import { breakpoints } from './tokens.js';
 
@@ -55,3 +55,4 @@ export default function variantsPreset (cc) {
     cc.add({ id: name, media: query });
   }
 }
+*/
