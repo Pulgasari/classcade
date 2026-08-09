@@ -1,16 +1,20 @@
-// @classcade/runtime.js
+// @classcade/runtime
 
-// the browser-facing runtime. the Compiler is pure (source -> css); this
-// wraps it with dom scanning, deduped injection, and live observation.
+// the browser-facing runtime. @classcade/compiler is pure (source -> css);
+// this wraps it with dom scanning, deduped injection, and live observation.
 //
-//   const cc = new Classcade();
+//   import { create } from '@classcade/runtime';
+//   import { css, variants } from '@classcade/presets';
+//
+//   const cc = create();
 //   cc.use(css).use(variants);
 //   cc.start();   // scan once, then observe
 
-import Compiler from './compiler/index.js';
-import Injector from './compiler/injector.js';
-import Observer from './compiler/observer.js';
-import Scanner  from './compiler/scanner.js';
+import { Compiler } from '@classcade/compiler';
+
+import Injector from './injector.js';
+import Observer from './observer.js';
+import Scanner  from './scanner.js';
 
 const DEFAULT_ATTRIBUTES = ['cc', 'class', 'classcade', 'className', 'data-classcade'];
 
@@ -27,9 +31,9 @@ export class Classcade {
 
   use (preset) { this.compiler.use(preset); return this; }
 
-  definePropAlias   (...a) { this.compiler.definePropAlias(...a);   return this; }
-  defineFnAlias     (...a) { this.compiler.defineFnAlias(...a);     return this; }
-  defineShorthand   (...a) { this.compiler.defineShorthand(...a);   return this; }
+  definePropAlias     (...a) { this.compiler.definePropAlias(...a);     return this; }
+  defineFnAlias       (...a) { this.compiler.defineFnAlias(...a);       return this; }
+  defineShorthand     (...a) { this.compiler.defineShorthand(...a);     return this; }
   defineMediaVariant  (...a) { this.compiler.defineMediaVariant(...a);  return this; }
   definePrefixVariant (...a) { this.compiler.definePrefixVariant(...a); return this; }
   defineSuffixVariant (...a) { this.compiler.defineSuffixVariant(...a); return this; }
@@ -57,3 +61,7 @@ export class Classcade {
 }
 
 export default Classcade;
+
+export function create (options = {}) {
+  return new Classcade(options);
+}
