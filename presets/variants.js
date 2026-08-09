@@ -1,3 +1,38 @@
+// @classcade/presets/variants.js
+
+// state, theme and breakpoint variants. registered through the compiler's
+// define* api so every entry carries the correct kind.
+
+import { breakpoints } from './tokens.js';
+
+export default function variantsPreset (cc) {
+
+  // :::::: State (suffix) variants
+
+  cc.defineSuffixVariant('hover',        ':hover');
+  cc.defineSuffixVariant('focus',        ':focus');
+  cc.defineSuffixVariant('focus-within', ':focus-within');
+  cc.defineSuffixVariant('active',       ':active');
+  cc.defineSuffixVariant('disabled',     ':disabled');
+  cc.defineSuffixVariant('visited',      ':visited');
+  cc.defineSuffixVariant('checked',      ':checked');
+  cc.defineSuffixVariant('first',        ':first-child');
+  cc.defineSuffixVariant('last',         ':last-child');
+  cc.defineSuffixVariant('odd',          ':nth-child(odd)');
+  cc.defineSuffixVariant('even',         ':nth-child(even)');
+
+  // :::::: Theme (prefix) variant
+
+  cc.definePrefixVariant('dark', '[data-theme="dark"] ');
+
+  // :::::: Breakpoint (media) variants
+
+  for (const [name, query] of Object.entries(breakpoints)) {
+    cc.defineMediaVariant(name, query);
+  }
+}
+
+
 // presets/variants.js
 import { breakpoints } from './tokens.js';
 
