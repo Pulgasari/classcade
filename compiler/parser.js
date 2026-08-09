@@ -1,123 +1,117 @@
 // @classcade/compiler/parser.js
 
-import { Lexer, buildTokenTypes, resolveRules }         from '@cosmonaut/lexer';
-import { ParserState, many, map, optional, seq, token } from '@cosmonaut/parser';
+// source string -> ast. one class-attribute value like
+// "bg[red]:hover[blue] block flex[1]!" becomes a flat list of item nodes.
+//
+// grammar (per item):
+//
+//   item    := prop value? segment* "!"?
+//   segment := ":" variant value?
+//   value   := "[" opaque "]"
+//   prop    := IDENTIFIER
+//   variant := IDENTIFIER
+//
+// the value between brackets is OPAQUE css and is never tokenized further —
+// it may contain calc(), commas, spaces, functions, hex colors, anything.
+// the lexer scans a whole balanced "[...]" as one BRACKET token whose value
+// is the inner text without the brackets.
+
+import { Lexer, TokenStream, buildTokenTypes, resolveRules } from '@cosmonaut/compiler';
+import { many, many1, map, optional, seq, token }            from '@cosmonaut/parsers';
+
+// :::::: Token types
+
+const tokenTypes = buildTokenTypes(['BRACKET']);
 
 // :::::: Lexer
 
-const tokenTypes = buildTokenTypes();
-const rules      = resolveRules([identifierOrDeclaration]);
-const puncts     = ['!', ':'];
-
-function tokenize (source) {
-  return new Lexer(source, { 
-    tokenTypes     : buildTokenTypes(),
-    puncts         : ['!', ':'],
-    rules          : resolveRules([identifierOrDeclaration]),
-    skipWhitespace : true 
-  }).tokenize();
-}
-
-// ::::::
-
-const identifierOrDeclaration = {
-  id   : 'ident-or-decl',
-  type : tokenTypes.IDENTIFIER,
+// a balanced bracket group, depth-counted so nested "[...]" inside a value
+// (rare, but legal in css like attr selectors) does not close early. emits
+// the INNER text as the token value.
+const bracketValue = {
+  id   : 'bracket',
+  type : tokenTypes.BRACKET,
   match (input, pos) {
-    if (!/[a-zA-Z_]/.test(input[pos])) return null;
+    if (input[pos] !== '[') return null;
 
-    let i = pos;
-    while (i < input.length && /[a-zA-Z0-9_-]/.test(input[i])) i++;
-
-    // Nur wenn DIREKT (kein Leerzeichen, kein sonstiges Zeichen) ein "["
-    // folgt, gehört der Klammerinhalt zum selben Token dazu.
-    if (input[i] === '[') {
-      let depth = 0;
-      for (; i < input.length; i++) {
-        if      (input[i] === '[') depth++;
-        else if (input[i] === ']') { depth--; if (depth === 0) { i++; break; } }
-      }
-      if (depth !== 0) throw new SyntaxError(`[classcade] Unclosed bracket at position ${pos}.`);
+    let depth = 0;
+    for (let i = pos; i < input.length; i++) {
+      if      (input[i] === '[') depth++;
+      else if (input[i] === ']') { depth--; if (depth === 0) return i - pos + 1; }
     }
-
-    return i - pos;
+    throw new SyntaxError(`[classcade] Unclosed bracket at position ${pos}.`);
   },
 };
 
+const identifier = {
+  id    : 'identifier',
+  type  : tokenTypes.IDENTIFIER,
+  regex : /[a-zA-Z_][a-zA-Z0-9_-]*/,
+};
 
-
-function splitDeclaration (raw) {
-  const open = raw.indexOf('[');
-  return open === -1
-    ? { prop: raw, value: null }
-    : { prop: raw.slice(0, open), value: raw.slice(open + 1, -1) };
+function createLexer (source) {
+  return new Lexer(source, {
+    tokenTypes,
+    puncts         : [':', '!'],
+    rules          : resolveRules([bracketValue, identifier]),
+    skipWhitespace : true,
+  });
 }
 
+// :::::: Combinators
 
+// a BRACKET token's value still carries its outer "[" "]" — strip them here
+// so downstream sees only the opaque inner css.
+const inner = raw => raw.slice(1, -1);
 
+const value = map(token(tokenTypes.BRACKET), tok => inner(tok.value));
 
-
-// -----------------------------------------------------------------------
-// Grammatik: [ "!" ] , { IDENT ":" } , IDENT , [ BRACKET_VALUE ]
-//
-//   !bg[red]              -> important
-//   hover:md:bg[red]       -> variants: ['hover','md']
-//   block                  -> kein Wert (nur gültig, wenn später als
-//                              Shorthand registriert - das prüft der
-//                              Resolver, nicht der Parser)
-//
-// grammatik is scheisse, müsste sein:
-// bg[red]!
-// bg[red]:hover[blue]
-
-
-const parseDeclarationTail   = map(
-  token('IDENTIFIER'),
-  tok => splitDeclaration(tok.value)
-);
-const parseVariantSegment = map(
-  seq(
-    token('IDENTIFIER'),
-    token(':')
-  ), 
-  ([idToken]) => idToken.value);
-
-const parseItem = map(
-  seq(
-    optional(token('!')), 
-    many(variantSeg), 
-    declTail
-  ),
-  ([bang, variants, decl]) => {
-    const raw = `${bang ? '!' : ''}${variants.map(v => `${v}:`).join('')}${decl.prop}${decl.value !== null ? `[${decl.value}]` : ''}`;
-    const node = { 
-      type: 'decl', 
-      prop: decl.prop, 
-      value: decl.value, 
-      important: !!bang, 
-      raw 
-    };
-    return variants.length 
-      ? { type: 'variant', variants, node, raw } 
-      : node;
-  },
+// ":" variant value?  ->  { variant, value }
+const segment = map(
+  seq(token(':'), token(tokenTypes.IDENTIFIER), optional(value)),
+  ([, id, val]) => ({ variant: id.value, value: val }),
 );
 
-const parseClassList = many(item);
+// prop value? segment* "!"?
+const item = map(
+  seq(token(tokenTypes.IDENTIFIER), optional(value), many(segment), optional(token('!'))),
+  ([prop, base, segments, bang]) => ({
+    type      : 'rule',
+    prop      : prop.value,
+    base      : base,             // string | null
+    states    : segments,         // [{ variant, value }]
+    important : bang !== null,
+    raw       : rebuild(prop.value, base, segments, bang !== null),
+  }),
+);
+
+const classList = many1(item);
+
+// canonical string form, reused verbatim as the css class selector so the
+// generated selector always round-trips back to what stood in the markup.
+function rebuild (prop, base, segments, important) {
+  let out = prop;
+  if (base !== null) out += `[${base}]`;
+  for (const s of segments) out += `:${s.variant}${s.value !== null ? `[${s.value}]` : ''}`;
+  if (important) out += '!';
+  return out;
+}
+
+// :::::: Parser
 
 export class Parser {
-  parse (source) {
-    const tokens = tokenize(source);
-    const state  = new ParserState(tokens);
-    const result = parseClassList(state);
 
-    if (result === undefined || !state.isEOF()) {
-      throw new SyntaxError(`[classcade] Failed to parse "${source}" at token ${state.index}.`);
+  parse (source) {
+    const tokens = createLexer(source).tokenize();
+    const stream = new TokenStream(tokens);
+    const result = classList(stream);
+
+    if (result === undefined || !stream.eof()) {
+      throw new SyntaxError(`[classcade] Failed to parse "${source}" at token ${stream.index}.`);
     }
     return result;
   }
+
 }
 
 export default Parser;
-
-
