@@ -18,9 +18,9 @@
 <script type='module'>
 import { createDocsFW, html } from '@aufbau/builders/docs';
 
-// Service Worker registration for local assets
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  navigator.serviceWorker
+  navigator
+    .serviceWorker
     .register(new URL('./sw.js', import.meta.url), { type: 'module' })
     .catch(err => console.error('[SW Error]:', err));
 }
@@ -34,7 +34,7 @@ function VersionBanner() {
 }
 
 createDocsFW({
-  index  : '$repo/readme.md',
+  index  : 'readme.md',
   target : '#app',
   brand: {
     title : 'classcade'
@@ -45,18 +45,13 @@ createDocsFW({
   },
   
   sidebar: {
-    docs       : '$repo/readme.md',
-    elements   : '$repo/elements/readme.md',
-    kits       : '$repo/kits/readme.md',
-    packages   : 'packages.md',
-    resources  : 'resources.md',
+    docs : 'readme.md',
   },
 
   footerText : 'classcade | 2026',
-  before     : VersionBanner,
   after      : '<p class="content-feedback">Found an issue? Edit this page on GitHub.</p>'       
 });
 </script>
   
 </body>
-  </html>
+</html>
