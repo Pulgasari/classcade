@@ -1,4 +1,4 @@
-// @classcade/compiler/observer.js
+// @classcade/runtime/observer.js
 
 // watches the document for added nodes and attribute changes, handing each
 // change back to the runtime to (re)process. browser-only.
