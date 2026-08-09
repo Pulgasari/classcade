@@ -1,4 +1,4 @@
-// @classcade/compiler/scanner.js
+// @classcade/runtime/scanner.js
 
 // walks a dom subtree and collects the raw values of the configured class
 // attributes. each entry is { node, attribute, value }.
