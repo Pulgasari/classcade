@@ -1,0 +1,8 @@
+{
+  "name": "@classcade/runtime",
+  "version": "1.0.0",
+  "exports": "./index.js",
+  "imports": {
+    "@classcade/compiler": "jsr:@classcade/compiler@^1.0.0"
+  }
+}
